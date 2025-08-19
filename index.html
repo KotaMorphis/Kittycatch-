@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0f1115">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<title>Kitty Catch — PWA</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#151a23; --ring:#262e3e; --text:#e7ecf5; --muted:#95a0b8;
+    --accent:#6aa8ff; --warn:#ffd166; --bad:#ff6b6b; --ok:#47d16c;
+  }
+  html,body{height:100%}
+  body{margin:0; background:var(--bg); color:var(--text); font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial; touch-action:manipulation; overscroll-behavior:none}
+  header{padding:10px 14px; display:flex; gap:10px; align-items:center; border-bottom:1px solid var(--ring); background:linear-gradient(180deg,#141826,#0f1115); position:sticky; top:0; z-index:3}
+  h1{font-size:16px; margin:0}
+  .spacer{flex:1}
+  .btn{background:#111624;border:1px solid var(--ring);color:#var(--text);padding:10px 12px;border-radius:12px}
+  .btn.primary{background:var(--accent); color:#0b1222; border:none}
+  main{min-height:0; display:flex; flex-direction:column}
+  #stage-wrap{position:relative; height: calc(100dvh - 54px);}
+  canvas{position:absolute; inset:0; width:100%; height:100%; background:linear-gradient(180deg,#0c1018,#0a0e15)}
+  #hud{position:absolute; inset:0; pointer-events:none; font-weight:600}
+  #hud .top{position:absolute; top:12px; left:12px; display:flex; gap:8px; align-items:center; flex-wrap:wrap}
+  #hud .badge{padding:6px 12px; border:1px solid var(--ring); border-radius:999px; background:#0c1220}
+  #hud .right{position:absolute; top:12px; right:12px; display:flex; gap:8px}
+  #hud .center{position:absolute; inset:0; display:flex; align-items:center; justify-content:center; text-align:center; padding:16px}
+  #hud .panel{background:rgba(15,17,21,.88); border:1px solid var(--ring); padding:18px; border-radius:14px; max-width:540px}
+  .kbd{display:inline-block; padding:2px 8px; border:1px solid var(--ring); border-radius:6px; color:#95a0b8}
+  #touch-controls{position:absolute; inset:0; pointer-events:none}
+  .tc-btn{
+    position:absolute; bottom:22px; width:42vw; max-width:280px; height:72px; border-radius:16px;
+    background:#0c1220cc; border:1px solid var(--ring); pointer-events:auto;
+    display:grid; place-items:center; font-weight:700; user-select:none; -webkit-user-select:none;
+  }
+  #btn-left{ left:16px; }
+  #btn-right{ right:16px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🐱 Kitty Catch</h1>
+  <div class="spacer"></div>
+  <button id="btn-install" class="btn">➕ Install</button>
+  <button id="btn-play" class="btn primary">▶ Play</button>
+  <button id="btn-restart" class="btn">↻ Restart</button>
+</header>
+<main>
+  <div id="stage-wrap">
+    <canvas id="stage"></canvas>
+    <div id="hud">
+      <div class="top">
+        <div class="badge" id="score-badge">Score 0</div>
+        <div class="badge" id="lives-badge">❤️❤️❤️</div>
+        <div class="badge" id="hi-badge">Best 0</div>
+      </div>
+      <div class="right">
+        <div class="badge" id="wave-badge">Level 1</div>
+      </div>
+      <div class="center" id="center-ui">
+        <div class="panel">
+          <h2 style="margin:0 0 8px 0">Kitty Catch</h2>
+          <div class="muted" style="margin-bottom:10px">
+            Move left/right to <b>catch kittens</b> 🐱 and <b>avoid crocs in cat suits</b> 🐊😼.
+            <div style="margin-top:8px">Drag anywhere to move — or use the big buttons.</div>
+          </div>
+          <div class="muted" style="font-size:14px">
+            +10 per kitten • -1 life on croc • 3 lives • difficulty ramps up
+          </div>
+          <div style="margin-top:12px">
+            <button class="btn primary" data-action="start">▶ Start</button>
+            <button class="btn" data-action="restart">↻ Restart</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="touch-controls">
+      <div id="btn-left" class="tc-btn">◀ LEFT</div>
+      <div id="btn-right" class="tc-btn">RIGHT ▶</div>
+    </div>
+  </div>
+</main>
+
+<script>
+// PWA install prompt (Android/desktop). On iOS use Share → Add to Home Screen.
+let deferredPrompt = null;
+window.addEventListener('beforeinstallprompt', (e)=>{ e.preventDefault(); deferredPrompt = e; document.getElementById('btn-install').style.display='inline-block'; });
+document.getElementById('btn-install').addEventListener('click', async ()=>{ if(!deferredPrompt) return; deferredPrompt.prompt(); await deferredPrompt.userChoice; deferredPrompt=null; });
+if('serviceWorker' in navigator){ navigator.serviceWorker.register('./sw.js'); }
+
+(() => {
+  const canvas = document.getElementById('stage');
+  const ctx = canvas.getContext('2d', { alpha:false });
+
+  // HUD
+  const scoreEl = document.getElementById('score-badge');
+  const livesEl = document.getElementById('lives-badge');
+  const hiEl = document.getElementById('hi-badge');
+  const waveEl = document.getElementById('wave-badge');
+  const centerUI = document.getElementById('center-ui');
+
+  document.getElementById('btn-play').addEventListener('click', () => startGame());
+  document.getElementById('btn-restart').addEventListener('click', () => hardReset());
+
+  // Touch buttons
+  const btnLeft = document.getElementById('btn-left');
+  const btnRight = document.getElementById('btn-right');
+  let holdLeft = false, holdRight = false;
+  btnLeft.addEventListener('pointerdown', (e)=>{ e.preventDefault(); holdLeft=true; });
+  btnLeft.addEventListener('pointerup',   ()=> holdLeft=false);
+  btnLeft.addEventListener('pointercancel', ()=> holdLeft=false);
+  btnRight.addEventListener('pointerdown', (e)=>{ e.preventDefault(); holdRight=true; });
+  btnRight.addEventListener('pointerup',   ()=> holdRight=false);
+  btnRight.addEventListener('pointercancel', ()=> holdRight=false);
+
+  // Drag anywhere on canvas
+  let dragId = null;
+  canvas.addEventListener('pointerdown', (e)=>{ e.preventDefault(); dragId = e.pointerId; moveToClientX(e.clientX); });
+  canvas.addEventListener('pointermove', (e)=>{ if(dragId===e.pointerId){ moveToClientX(e.clientX); } });
+  canvas.addEventListener('pointerup', (e)=>{ if(dragId===e.pointerId) dragId=null; });
+  canvas.addEventListener('pointercancel', (e)=>{ if(dragId===e.pointerId) dragId=null; });
+
+  function moveToClientX(clientX){
+    const r = canvas.getBoundingClientRect();
+    const x = (clientX - r.left) / r.width * WORLD_W;
+    player.targetX = x;
+  }
+
+  // World + state
+  const WORLD_W = 900, WORLD_H = 600;
+  const groundY = WORLD_H * 0.92;
+  let gameState = 'menu'; let last = 0;
+  let player, items, score, lives, hiScore, level, fallBase, fallGain, spawnTimer;
+  const playerSpeed = 900;
+
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  let actx = null;
+  function bleep(freq=440, dur=0.08, type='sine', vol=0.03){
+    try{ if(!actx) actx = new AudioCtx(); const o=actx.createOscillator(); const g=actx.createGain(); o.type=type; o.frequency.value=freq; g.gain.value=vol; o.connect(g); g.connect(actx.destination); o.start(); setTimeout(()=>{o.stop();o.disconnect();g.disconnect();}, dur*1000);}catch(_){}
+  }
+  function vibrate(ms){ try{ navigator.vibrate && navigator.vibrate(ms); }catch(_){ } }
+
+  function resize(){
+    const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = Math.floor(rect.width * dpr);
+    canvas.height = Math.floor(rect.height * dpr);
+    ctx.setTransform(canvas.width / WORLD_W, 0, 0, canvas.height / WORLD_H, 0, 0);
+  }
+  const ro = new ResizeObserver(resize);
+  ro.observe(canvas);
+
+  function reset(){
+    player = { x: WORLD_W/2 - 50, y: groundY-26, w: 100, h: 22, targetX: WORLD_W/2 };
+    items = []; score = 0; lives = 3; level = 1; fallBase = 170; fallGain = 0.5; spawnTimer = 0;
+  }
+  function hardReset(){ reset(); gameState='menu'; centerUI.style.display='flex'; updateHUD(); draw(0); }
+  function startGame(){ if(gameState==='playing') return; if(gameState==='gameover'){ reset(); } gameState='playing'; centerUI.style.display='none'; last=performance.now(); requestAnimationFrame(loop); }
+  function gameOver(){ gameState='gameover'; centerUI.querySelector('h2').textContent='Game Over'; centerUI.querySelector('.muted').textContent=`Score ${score} • Best ${hiScore}`; centerUI.style.display='flex'; if(score>hiScore){ hiScore=score; try{ localStorage.setItem('kitty_catch_hi', String(hiScore)); }catch(_){ } } bleep(180,.2,'sawtooth',.04); vibrate(80); }
+
+  function update(dt){
+    fallBase += fallGain * dt * 60;
+    if(Math.floor(score/100)+1 > level){ level = Math.floor(score/100)+1; waveEl.textContent = `Level ${level}`; bleep(720,.07,'square',.03); }
+    const dx = player.targetX - (player.x + player.w/2);
+    const step = Math.sign(dx) * Math.min(Math.abs(dx), playerSpeed * dt);
+    player.x += step;
+    if(holdLeft)  player.x -= playerSpeed * dt * 0.9;
+    if(holdRight) player.x += playerSpeed * dt * 0.9;
+    player.x = Math.max(8, Math.min(WORLD_W - player.w - 8, player.x));
+
+    spawnTimer -= dt;
+    if(spawnTimer<=0){
+      const type = Math.random() < 0.7 ? 'kitten' : 'croc';
+      const size = type==='kitten' ? 26 : 30;
+      items.push({ type, x: Math.random()*(WORLD_W - size*2) + size, y: -40, r: size/2, vy: fallBase + Math.random()*120 });
+      spawnTimer = Math.max(0.25, 0.8 - level*0.02);
+    }
+
+    items.forEach(it => it.y += it.vy * dt);
+
+    for(const it of items){
+      if(circleRectOverlap(it.x, it.y, it.r, player)){
+        if(it.type==='kitten'){ score += 10; it.y = WORLD_H + 999; bleep(880,.05,'triangle',.035); vibrate(10); }
+        else { lives -= 1; it.y = WORLD_H + 999; bleep(220,.08,'sawtooth',.035); vibrate(40); if(lives<=0){ gameOver(); break; } }
+      }
+    }
+    items = items.filter(it => it.y - it.r <= WORLD_H + 20);
+    score += Math.floor(dt * 6);
+  }
+
+  function draw(){
+    ctx.clearRect(0,0,WORLD_W,WORLD_H);
+    drawBackground();
+    ctx.strokeStyle = '#1b2437'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(0, groundY+2); ctx.lineTo(WORLD_W, groundY+2); ctx.stroke();
+    drawBasket(player.x, player.y, player.w, player.h);
+    for(const it of items){ if(it.type==='kitten') drawKitten(it.x, it.y, it.r*1.8, it.r*1.8); else drawCrocCat(it.x, it.y, it.r*1.9, it.r*1.6); }
+  }
+
+  function loop(now){ if(gameState!=='playing') return; const dt = Math.min(0.033, (now - last)/1000); last = now; update(dt); draw(); updateHUD(); requestAnimationFrame(loop); }
+
+  function drawBackground(){ ctx.fillStyle = '#0a0f1a'; ctx.fillRect(0,0,WORLD_W,WORLD_H); ctx.fillStyle = '#0d1320'; for(let i=0;i<40;i++){ const x=(i*137)%WORLD_W, y=(i*83)%Math.floor(WORLD_H*0.7); ctx.fillRect(x,y,2,2); } ctx.fillStyle = '#101729'; ctx.fillRect(0, WORLD_H*0.78, WORLD_W, 8); ctx.fillStyle = '#111b31'; ctx.fillRect(0, WORLD_H*0.81, WORLD_W, 6); }
+  function drawBasket(x,y,w,h){ ctx.fillStyle='#4a556e'; roundRect(x,y,w,h,6,true); ctx.fillStyle='#606b88'; for(let i=0;i<5;i++){ const gx = x + (i+1)*w/6; ctx.fillRect(gx-2,y,4,h); } }
+  function drawKitten(cx,cy,w,h){ const x=cx-w/2, y=cy-h/2; ctx.fillStyle='#ffd166'; roundRect(x,y,w,h,Math.min(10,w/6),true); ctx.beginPath(); ctx.moveTo(x+w*0.2,y); ctx.lineTo(x+w*0.3,y-h*0.35); ctx.lineTo(x+w*0.4,y); ctx.closePath(); ctx.fill(); ctx.beginPath(); ctx.moveTo(x+w*0.6,y); ctx.lineTo(x+w*0.7,y-h*0.35); ctx.lineTo(x+w*0.8,y); ctx.closePath(); ctx.fill(); ctx.fillStyle='#0f1115'; ctx.fillRect(x+w*0.32,y+h*0.35,6,8); ctx.fillRect(x+w*0.62,y+h*0.35,6,8); ctx.fillStyle='#e7b95e'; ctx.fillRect(x+w*0.47,y+h*0.52,6,4); ctx.strokeStyle='#e7b95e'; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(x+w*0.28,y+h*0.5); ctx.lineTo(x+w*0.16,y+h*0.5); ctx.moveTo(x+w*0.28,y+h*0.56); ctx.lineTo(x+w*0.16,y+h*0.58); ctx.moveTo(x+w*0.72,y+h*0.5); ctx.lineTo(x+w*0.84,y+h*0.5); ctx.moveTo(x+w*0.72,y+h*0.56); ctx.lineTo(x+w*0.84,y+h*0.58); ctx.stroke(); }
+  function drawCrocCat(cx,cy,w,h){ const x=cx-w/2, y=cy-h/2; ctx.fillStyle='#47d16c'; roundRect(x,y,w,h,8,true); ctx.beginPath(); ctx.moveTo(x+w*0.25,y); ctx.lineTo(x+w*0.37,y-h*0.32); ctx.lineTo(x+w*0.49,y); ctx.closePath(); ctx.fill(); ctx.beginPath(); ctx.moveTo(x+w*0.51,y); ctx.lineTo(x+w*0.63,y-h*0.32); ctx.lineTo(x+w*0.75,y); ctx.closePath(); ctx.fill(); ctx.fillStyle='#0f1115'; ctx.fillRect(x+w*0.34,y+h*0.34,5,7); ctx.fillRect(x+w*0.62,y+h*0.34,5,7); ctx.strokeStyle='#2a9d5b'; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(x+w*0.27,y+h*0.52); ctx.lineTo(x+w*0.15,y+h*0.52); ctx.moveTo(x+w*0.73,y+h*0.52); ctx.lineTo(x+w*0.85,y+h*0.52); ctx.stroke(); ctx.fillStyle='#e6eaf2'; ctx.fillRect(x+w*0.48,y+h*0.62,4,5); ctx.fillRect(x+w*0.52,y+h*0.62,4,5); }
+  function roundRect(x,y,w,h,r,fill){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); if(fill) ctx.fill(); else ctx.stroke(); }
+  function circleRectOverlap(cx,cy,cr,r){ const closestX=Math.max(r.x,Math.min(cx,r.x+r.w)); const closestY=Math.max(r.y,Math.min(cy,r.y+r.h)); const dx=cx-closestX, dy=cy-closestY; return (dx*dx+dy*dy)<=cr*cr; }
+  function updateHUD(){ scoreEl.textContent = `Score ${score}`; livesEl.textContent = '❤️'.repeat(Math.max(0,lives)); hiEl.textContent = `Best ${hiScore}`; }
+  function boot(){ try{ hiScore = parseInt(localStorage.getItem('kitty_catch_hi') || '0', 10); } catch(_){ hiScore = 0; } reset(); gameState='menu'; resize(); draw(0); updateHUD(); } boot();
+})();
+</script>
+</body>
+</html>
